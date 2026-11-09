@@ -1,0 +1,97 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  background-color: #ECE8DF;
+  color: #2D251E;
+  -webkit-tap-highlight-color: transparent;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.cream-card {
+  background: #FAF8F3;
+  border: 1.5px solid #DDD7C9;
+  border-radius: 1.5rem;
+  box-shadow: 0 8px 24px -6px rgba(60, 48, 36, 0.07);
+}
+
+.cream-subcard {
+  background: #EFECE4;
+  border: 1px solid #DDD7C9;
+  border-radius: 1.15rem;
+}
+
+.butter-btn {
+  background: #F2CA62;
+  color: #2D251E;
+  border: 1.5px solid #E3B84F;
+  border-radius: 1.15rem;
+  box-shadow: 0 3px 0 rgba(45, 37, 30, 0.12);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.15s ease;
+}
+
+.butter-btn:hover:not(:disabled) {
+  filter: brightness(1.03);
+}
+
+.butter-btn:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 rgba(45, 37, 30, 0.12);
+}
+
+.caramel-btn {
+  background: #C48E63;
+  color: #FAF8F3;
+  border: 1.5px solid #B37C52;
+  border-radius: 1.15rem;
+  box-shadow: 0 3px 0 rgba(45, 37, 30, 0.14);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.15s ease;
+}
+
+.caramel-btn:hover:not(:disabled) {
+  filter: brightness(1.04);
+}
+
+.caramel-btn:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 rgba(45, 37, 30, 0.14);
+}
+
+.soft-pill-btn {
+  background: #FAF8F3;
+  color: #2D251E;
+  border: 1.5px solid #DDD7C9;
+  border-radius: 1rem;
+  transition: background-color 0.15s ease, transform 0.12s ease;
+}
+
+.soft-pill-btn:hover:not(:disabled) {
+  background: #EFECE4;
+}
+
+.soft-pill-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+@keyframes recPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.22); opacity: 0.55; }
+}
+
+@keyframes gentleBob {
+  0%, 100% { transform: translateY(0px) rotate(-1deg); }
+  50% { transform: translateY(-4px) rotate(1deg); }
+}
+
+.anim-rec-dot {
+  animation: recPulse 1.3s ease-in-out infinite;
+}
+
+.anim-gentle-bob {
+  animation: gentleBob 2.6s ease-in-out infinite;
+}
