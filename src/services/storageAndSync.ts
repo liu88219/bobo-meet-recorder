@@ -23,9 +23,11 @@ const TEXTDB_DEV_API_URL = 'https://textdb.dev/api/data';
 const NTFY_BASE_URL = 'https://ntfy.sh';
 
 const IDB_NAME = 'BoboMeetDB';
+const IDB_VERSION = 2;
 const IDB_KV_STORE = 'kv';
 const IDB_AUDIO_STORE = 'audio_blobs';
 const IDB_CRASH_CHUNKS_STORE = 'active_chunks';
+const IDB_SCREENSHOTS_STORE = 'note_screenshots';
 
 const IDB_STATE_KEY = 'vault_state_v1';
 const IDB_PASS_KEY = 'saved_passcode_v1';
@@ -93,7 +95,7 @@ function openIdb(): Promise<IDBDatabase | null> {
 
   const rawPromise = new Promise<IDBDatabase | null>((resolve) => {
     try {
-      const req = indexedDB.open(IDB_NAME, 1);
+      const req = indexedDB.open(IDB_NAME, IDB_VERSION);
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains(IDB_KV_STORE)) {
@@ -104,6 +106,9 @@ function openIdb(): Promise<IDBDatabase | null> {
         }
         if (!db.objectStoreNames.contains(IDB_CRASH_CHUNKS_STORE)) {
           db.createObjectStore(IDB_CRASH_CHUNKS_STORE);
+        }
+        if (!db.objectStoreNames.contains(IDB_SCREENSHOTS_STORE)) {
+          db.createObjectStore(IDB_SCREENSHOTS_STORE);
         }
       };
       req.onsuccess = () => {
@@ -220,6 +225,19 @@ export async function getAudioBlob(recordId: string): Promise<Blob | null> {
 
 export async function deleteAudioBlob(recordId: string): Promise<void> {
   await idbDelete(IDB_AUDIO_STORE, recordId);
+}
+
+export async function saveNoteScreenshot(noteId: string, dataUrl: string): Promise<void> {
+  await idbPutAny(IDB_SCREENSHOTS_STORE, noteId, dataUrl);
+}
+
+export async function getNoteScreenshot(noteId: string): Promise<string | null> {
+  const res = await idbGetAny<string>(IDB_SCREENSHOTS_STORE, noteId);
+  return typeof res === 'string' && res.startsWith('data:image/') ? res : null;
+}
+
+export async function deleteNoteScreenshots(noteIds: string[]): Promise<void> {
+  await Promise.all(noteIds.map((id) => idbDelete(IDB_SCREENSHOTS_STORE, id)));
 }
 
 export async function listStoredAudioBlobIds(): Promise<Set<string>> {

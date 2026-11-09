@@ -5,6 +5,8 @@ export interface TimestampNote {
   elapsedSec: number;
   label: string;
   createdAt: number;
+  wantsScreenshot?: boolean;
+  hasLocalSnapshot?: boolean;
 }
 
 export interface MeetingRecordMeta {
@@ -12,6 +14,7 @@ export interface MeetingRecordMeta {
   title: string;
   mode: RecordingMode;
   includeMicInTabMode: boolean;
+  includeLightScreenVideo?: boolean;
   startedAt: number;
   endedAt: number;
   durationSec: number;
@@ -29,6 +32,7 @@ export interface ActiveCrashSessionMeta {
   title: string;
   mode: RecordingMode;
   includeMicInTabMode: boolean;
+  includeLightScreenVideo?: boolean;
   startedAt: number;
   lastChunkAt: number;
   elapsedSec: number;
@@ -133,4 +137,30 @@ export function detectSupportedAudioFormat(): { mimeType: string; fileExt: strin
     }
   }
   return { mimeType: '', fileExt: 'webm' };
+}
+
+export function detectSupportedLightVideoFormat(): { mimeType: string; fileExt: string } {
+  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
+    return { mimeType: '', fileExt: 'webm' };
+  }
+  const candidates: Array<{ mimeType: string; fileExt: string }> = [
+    { mimeType: 'video/webm;codecs=vp9,opus', fileExt: 'webm' },
+    { mimeType: 'video/webm;codecs=vp8,opus', fileExt: 'webm' },
+    { mimeType: 'video/webm', fileExt: 'webm' },
+    { mimeType: 'video/mp4', fileExt: 'mp4' },
+  ];
+  for (const c of candidates) {
+    try {
+      if (MediaRecorder.isTypeSupported(c.mimeType)) {
+        return c;
+      }
+    } catch {
+      // Ignore unsupported check error
+    }
+  }
+  return { mimeType: '', fileExt: 'webm' };
+}
+
+export function noteMentionsScreenshot(label: string): boolean {
+  return /截圖|畫面|擷圖|拍下來|存圖|投影片|表格|screenshot|snapshot|slide/i.test(label);
 }

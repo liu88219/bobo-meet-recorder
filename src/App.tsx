@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Camera,
   Check,
   Cloud,
   Copy,
@@ -34,8 +35,10 @@ import {
   checkPendingCrashRecoverySession,
   clearCrashRecoverySession,
   deleteAudioBlob,
+  deleteNoteScreenshots,
   getAudioBlob,
   getHistorySnapshots,
+  getNoteScreenshot,
   hydrateVaultFromIndexedDb,
   listStoredAudioBlobIds,
   loadLocalVaultSync,
@@ -48,6 +51,7 @@ import {
   recoverCrashedSessionToRecord,
   requestPersistentStorage,
   saveAudioBlob,
+  saveNoteScreenshot,
   saveRememberedPasscode,
   saveVaultLocally,
   startCrashRecoverySession,
@@ -62,12 +66,15 @@ import {
   VaultState,
   buildSafeAudioFilename,
   detectSupportedAudioFormat,
+  detectSupportedLightVideoFormat,
   formatBytes,
   formatDateTimeLabel,
   formatDuration,
+  noteMentionsScreenshot,
 } from './types/recorder';
 
 const QUICK_STAMP_TAGS = [
+  '📸 截圖此畫面',
   '📌 Action Item',
   '✨ Feature Request',
   '❓ 待確認問題',
@@ -110,7 +117,9 @@ export default function App() {
     canCaptureTabAudio ? 'tab_plus_mic' : 'mic_only'
   );
   const [includeMicInTabMode, setIncludeMicInTabMode] = useState<boolean>(true);
+  const [includeLightScreenVideo, setIncludeLightScreenVideo] = useState<boolean>(true);
   const [isMicMutedLive, setIsMicMutedLive] = useState<boolean>(false);
+  const [noteSnapshots, setNoteSnapshots] = useState<Record<string, string>>({});
 
   const [recState, setRecState] = useState<'idle' | 'starting' | 'recording' | 'paused'>('idle');
   const [elapsedSec, setElapsedSec] = useState<number>(0);
@@ -137,6 +146,8 @@ export default function App() {
   passcodeRef.current = passcode;
 
   const displayStreamRef = useRef<MediaStream | null>(null);
+  const clonedVideoTrackRef = useRef<MediaStreamTrack | null>(null);
+  const previewVideoElRef = useRef<HTMLVideoElement | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const micGainRef = useRef<GainNode | null>(null);
@@ -379,6 +390,14 @@ export default function App() {
       window.clearInterval(timerIdRef.current);
       timerIdRef.current = null;
     }
+    if (clonedVideoTrackRef.current) {
+      clonedVideoTrackRef.current.stop();
+      clonedVideoTrackRef.current = null;
+    }
+    if (previewVideoElRef.current) {
+      previewVideoElRef.current.srcObject = null;
+      previewVideoElRef.current = null;
+    }
     if (displayStreamRef.current) {
       displayStreamRef.current.getTracks().forEach((t) => t.stop());
       displayStreamRef.current = null;
@@ -468,6 +487,7 @@ export default function App() {
                 title: cleanTitle,
                 mode: meta?.mode || mode,
                 includeMicInTabMode: meta?.includeMicInTabMode ?? includeMicInTabMode,
+                includeLightScreenVideo: meta?.includeLightScreenVideo ?? includeLightScreenVideo,
                 startedAt,
                 endedAt: Date.now(),
                 durationSec: finalElapsed,
@@ -527,6 +547,7 @@ export default function App() {
       cleanupMediaResources,
       commitVaultUpdate,
       getCurrentElapsedSec,
+      includeLightScreenVideo,
       includeMicInTabMode,
       meetingTitle,
       mode,
@@ -579,6 +600,17 @@ export default function App() {
         }
 
         displayStreamRef.current = displayStream;
+        const rawVidTrack = displayStream.getVideoTracks()[0];
+        if (rawVidTrack) {
+          const vidEl = document.createElement('video');
+          vidEl.muted = true;
+          vidEl.playsInline = true;
+          vidEl.autoplay = true;
+          vidEl.srcObject = new MediaStream([rawVidTrack]);
+          vidEl.play().catch(() => {});
+          previewVideoElRef.current = vidEl;
+        }
+
         const tabAudioTracks = displayStream.getAudioTracks();
         if (tabAudioTracks.length === 0) {
           await cleanupMediaResources();
@@ -655,11 +687,51 @@ export default function App() {
         micGain.connect(dest);
       }
 
-      const { mimeType, fileExt } = detectSupportedAudioFormat();
-      const recOptions: MediaRecorderOptions = mimeType
-        ? { mimeType, audioBitsPerSecond: 32000 }
-        : { audioBitsPerSecond: 32000 };
-      const recorder = new MediaRecorder(dest.stream, recOptions);
+      let recorderStream: MediaStream = dest.stream;
+      let chosenMime = '';
+      let chosenExt = 'webm';
+      let recOptions: MediaRecorderOptions = { audioBitsPerSecond: 32000 };
+
+      if (
+        mode === 'tab_plus_mic' &&
+        includeLightScreenVideo &&
+        displayStreamRef.current &&
+        displayStreamRef.current.getVideoTracks().length > 0
+      ) {
+        const clonedVid = displayStreamRef.current.getVideoTracks()[0].clone();
+        clonedVideoTrackRef.current = clonedVid;
+        try {
+          await clonedVid.applyConstraints({
+            width: { ideal: 1280, max: 1440 },
+            height: { ideal: 720, max: 900 },
+            frameRate: { ideal: 1, max: 2 },
+          });
+        } catch {
+          // Ignore if browser ignores frameRate constraint on cloned tab track
+        }
+        const vidFmt = detectSupportedLightVideoFormat();
+        if (vidFmt.mimeType) {
+          chosenMime = vidFmt.mimeType;
+          chosenExt = vidFmt.fileExt;
+          recorderStream = new MediaStream([clonedVid, ...dest.stream.getAudioTracks()]);
+          recOptions = {
+            mimeType: chosenMime,
+            videoBitsPerSecond: 120000,
+            audioBitsPerSecond: 32000,
+          };
+        }
+      }
+
+      if (!chosenMime) {
+        const audFmt = detectSupportedAudioFormat();
+        chosenMime = audFmt.mimeType;
+        chosenExt = audFmt.fileExt;
+        recOptions = chosenMime
+          ? { mimeType: chosenMime, audioBitsPerSecond: 32000 }
+          : { audioBitsPerSecond: 32000 };
+      }
+
+      const recorder = new MediaRecorder(recorderStream, recOptions);
       mediaRecorderRef.current = recorder;
 
       const now = Date.now();
@@ -671,13 +743,14 @@ export default function App() {
         title: initialTitle,
         mode,
         includeMicInTabMode,
+        includeLightScreenVideo: mode === 'tab_plus_mic' ? includeLightScreenVideo : false,
         startedAt: now,
         lastChunkAt: now,
         elapsedSec: 0,
         chunkCount: 0,
         totalBytes: 0,
-        mimeType: recorder.mimeType || mimeType || 'audio/webm',
-        fileExt,
+        mimeType: recorder.mimeType || chosenMime || 'audio/webm',
+        fileExt: chosenExt,
         notes: [],
       };
 
@@ -758,25 +831,85 @@ export default function App() {
     setIsMicMutedLive(nextMuted);
   };
 
-  const addLiveTimestampNote = (textOverride?: string) => {
-    const content = (textOverride ?? noteInput).trim();
+  const captureLiveScreenFrame = useCallback((): string | null => {
+    const vid = previewVideoElRef.current;
+    if (!vid || vid.videoWidth <= 0 || vid.videoHeight <= 0) return null;
+    try {
+      const maxW = 1440;
+      const scale = Math.min(1, maxW / vid.videoWidth);
+      const w = Math.max(1, Math.round(vid.videoWidth * scale));
+      const h = Math.max(1, Math.round(vid.videoHeight * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(vid, 0, 0, w, h);
+      return canvas.toDataURL('image/jpeg', 0.88);
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const addLiveTimestampNote = async (textOverride?: string, forceScreenshot = false) => {
+    const rawContent = (textOverride ?? noteInput).trim();
+    const content = rawContent || (forceScreenshot ? '📸 截圖此畫面重點' : '');
     if (!content) return;
     const sec = getCurrentElapsedSec();
+    const wantsShot = forceScreenshot || noteMentionsScreenshot(content);
+    const noteId = `note_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+    let capturedDataUrl: string | null = null;
+    if (wantsShot && mode === 'tab_plus_mic') {
+      capturedDataUrl = captureLiveScreenFrame();
+      if (capturedDataUrl) {
+        await saveNoteScreenshot(noteId, capturedDataUrl);
+        setNoteSnapshots((prev) => ({ ...prev, [noteId]: capturedDataUrl! }));
+      }
+    }
+
     const note: TimestampNote = {
-      id: `note_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: noteId,
       elapsedSec: sec,
       label: content,
       createdAt: Date.now(),
+      wantsScreenshot: wantsShot,
+      hasLocalSnapshot: Boolean(capturedDataUrl),
     };
-    const next = [...liveNotes, note];
+    const next = [...liveNotesRef.current, note];
     setLiveNotes(next);
     liveNotesRef.current = next;
     if (!textOverride) setNoteInput('');
+    if (capturedDataUrl) {
+      showToast(`📸 已抓下 [${formatDuration(sec)}] 當下會議畫面並存檔！`);
+    }
     if (sessionMetaRef.current) {
       const updated = { ...sessionMetaRef.current, notes: next };
       sessionMetaRef.current = updated;
       updateCrashRecoveryMetaOnly(updated).catch(() => {});
     }
+  };
+
+  const handleViewOrDownloadNoteSnapshot = async (note: TimestampNote, recTitle?: string) => {
+    let dataUrl = noteSnapshots[note.id] || null;
+    if (!dataUrl) {
+      dataUrl = await getNoteScreenshot(note.id);
+      if (dataUrl) {
+        setNoteSnapshots((prev) => ({ ...prev, [note.id]: dataUrl! }));
+      }
+    }
+    if (!dataUrl) {
+      showToast('ℹ️ 此截圖可由 AI 直接從 .webm 會議檔案該時間節點自動擷取喔！');
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    const clean = (recTitle || meetingTitle || 'Meet').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 32);
+    a.download = `Screenshot_${clean}_${formatDuration(note.elapsedSec).replace(/:/g, 'm')}s.jpg`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast('🖼️ 已下載該節點的會議畫面截圖！');
   };
 
   const handleRecoverCrash = async () => {
@@ -834,13 +967,24 @@ export default function App() {
   };
 
   const handleCopyAiPrompt = async (rec: MeetingRecordMeta) => {
+    const hasScreenshotReq = rec.notes.some(
+      (n) => n.wantsScreenshot || noteMentionsScreenshot(n.label)
+    );
     const notesPart =
       rec.notes.length > 0
         ? `\n會議中標記重點：\n${rec.notes
-            .map((n) => `- [${formatDuration(n.elapsedSec)}] ${n.label}`)
+            .map((n) => {
+              const needShot = n.wantsScreenshot || noteMentionsScreenshot(n.label);
+              return `- [${formatDuration(n.elapsedSec)}] ${n.label}${
+                needShot ? ' （📸 請幫我擷取此節點畫面提及的內容並儲存！）' : ''
+              }`;
+            })
             .join('\n')}`
         : '';
-    const promptText = `請幫我把這份會議錄音檔「${rec.fileName}」（會議名稱：${rec.title}，時長：${formatDuration(rec.durationSec)}；已直接附檔或上傳至 Meet_Recordings 資料夾）轉成完整逐字稿並整理會議重點與 Action Items！${notesPart}`;
+    const shotExtra = hasScreenshotReq
+      ? '（注意：請一併幫我把上述標記需截圖的時間節點畫面擷取清晰圖片，儲存至對話 Artifact 並備份到 Meet_Recordings 資料夾！）'
+      : '';
+    const promptText = `請幫我把這份會議錄音檔「${rec.fileName}」（會議名稱：${rec.title}，時長：${formatDuration(rec.durationSec)}；已直接附檔或上傳至 Meet_Recordings 資料夾）轉成完整逐字稿並整理會議重點與 Action Items！${shotExtra}${notesPart}`;
     try {
       await navigator.clipboard.writeText(promptText);
       setCopiedId(rec.id);
@@ -865,6 +1009,10 @@ export default function App() {
         delete copy[recId];
         return copy;
       });
+    }
+    const targetRec = vaultRef.current.records.find((r) => r.id === recId);
+    if (targetRec && targetRec.notes.length > 0) {
+      await deleteNoteScreenshots(targetRec.notes.map((n) => n.id));
     }
     await deleteAudioBlob(recId);
     await refreshBlobIds();
@@ -1233,7 +1381,7 @@ export default function App() {
 
               {mode === 'tab_plus_mic' && (
                 <div className="cream-subcard p-3.5 space-y-2.5">
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex flex-col gap-2">
                     <label className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-[#2D251E] cursor-pointer select-none">
                       <input
                         type="checkbox"
@@ -1242,6 +1390,17 @@ export default function App() {
                         className="w-4 h-4 accent-[#C48E63] rounded"
                       />
                       <span>同時錄入我的麥克風聲音（若整場只聽不發言可取消勾選，錄音更乾淨）</span>
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-xs sm:text-sm font-bold text-[#2D251E] cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={includeLightScreenVideo}
+                        onChange={(e) => setIncludeLightScreenVideo(e.target.checked)}
+                        className="w-4 h-4 accent-[#C48E63] rounded"
+                      />
+                      <span>
+                        🎞️ 同步附帶超輕量會議畫面（1 秒 1 幀清晰投影片，方便會後請 AI 依妳標記的節點自動截圖存檔！）
+                      </span>
                     </label>
                   </div>
                   <div className="text-xs text-[#5C5044] bg-[#FAF8F3] border border-[#DDD7C9] rounded-xl px-3 py-2 leading-relaxed">
@@ -1387,9 +1546,20 @@ export default function App() {
                         addLiveTimestampNote();
                       }
                     }}
-                    placeholder={`在 [${formatDuration(elapsedSec)}] 記一筆重點（按 Enter 立即標記）...`}
+                    placeholder={`在 [${formatDuration(elapsedSec)}] 記重點（打「截圖...」會自動抓當下畫面！）`}
                     className="flex-1 px-3 py-2 rounded-xl bg-[#EFECE4]/70 border border-[#DDD7C9] text-xs sm:text-sm font-bold text-[#2D251E] placeholder:text-[#8A7E70] focus:outline-none focus:border-[#C48E63]"
                   />
+                  {mode === 'tab_plus_mic' && (
+                    <button
+                      type="button"
+                      onClick={() => addLiveTimestampNote(undefined, true)}
+                      className="butter-btn px-3 py-2 text-xs font-black shrink-0 inline-flex items-center gap-1"
+                      title="標記時間戳並立刻拍下目前會議分頁畫面"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>截圖標記</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => addLiveTimestampNote()}
@@ -1400,16 +1570,27 @@ export default function App() {
                 </div>
 
                 {liveNotes.length > 0 && (
-                  <div className="max-h-28 overflow-y-auto space-y-1 pt-1">
+                  <div className="max-h-36 overflow-y-auto space-y-1.5 pt-1">
                     {liveNotes.map((n) => (
                       <div
                         key={n.id}
-                        className="text-xs text-[#5C5044] flex items-center gap-2 bg-[#EFECE4]/60 px-2.5 py-1 rounded-lg"
+                        className="text-xs text-[#5C5044] flex items-center justify-between gap-2 bg-[#EFECE4]/60 px-2.5 py-1.5 rounded-lg"
                       >
-                        <span className="font-black text-[#C48E63] tabular-nums">
-                          [{formatDuration(n.elapsedSec)}]
-                        </span>
-                        <span className="text-[#2D251E] font-medium">{n.label}</span>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-black text-[#C48E63] tabular-nums shrink-0">
+                            [{formatDuration(n.elapsedSec)}]
+                          </span>
+                          <span className="text-[#2D251E] font-medium truncate">{n.label}</span>
+                        </div>
+                        {n.hasLocalSnapshot && (
+                          <button
+                            type="button"
+                            onClick={() => handleViewOrDownloadNoteSnapshot(n)}
+                            className="px-2 py-0.5 rounded-md bg-[#F2CA62]/50 text-[#2D251E] text-[11px] font-extrabold shrink-0"
+                          >
+                            🖼️ 下載截圖
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1569,11 +1750,25 @@ export default function App() {
                           📌 會議重點時間戳：
                         </div>
                         {rec.notes.map((n) => (
-                          <div key={n.id} className="text-xs text-[#2D251E] flex items-center gap-2">
-                            <span className="font-black text-[#C48E63] tabular-nums">
-                              [{formatDuration(n.elapsedSec)}]
-                            </span>
-                            <span>{n.label}</span>
+                          <div
+                            key={n.id}
+                            className="text-xs text-[#2D251E] flex items-center justify-between gap-2"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="font-black text-[#C48E63] tabular-nums shrink-0">
+                                [{formatDuration(n.elapsedSec)}]
+                              </span>
+                              <span className="truncate">{n.label}</span>
+                            </div>
+                            {(n.hasLocalSnapshot || n.wantsScreenshot) && (
+                              <button
+                                type="button"
+                                onClick={() => handleViewOrDownloadNoteSnapshot(n, rec.title)}
+                                className="px-2 py-0.5 rounded-md bg-[#F2CA62]/45 hover:bg-[#F2CA62] text-[#2D251E] text-[11px] font-extrabold shrink-0"
+                              >
+                                {n.hasLocalSnapshot ? '🖼️ 下載截圖' : '📸 已標記請 AI 截圖'}
+                              </button>
+                            )}
                           </div>
                         ))}
                       </div>
