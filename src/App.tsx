@@ -840,7 +840,7 @@ export default function App() {
             .map((n) => `- [${formatDuration(n.elapsedSec)}] ${n.label}`)
             .join('\n')}`
         : '';
-    const promptText = `請幫我從 Google Drive 的 Meet_Recordings 資料夾抓取最新上傳的會議錄音檔「${rec.fileName}」（會議名稱：${rec.title}，時長：${formatDuration(rec.durationSec)}），幫我轉成逐字稿並整理會議重點與 Action Items！${notesPart}`;
+    const promptText = `請幫我把這份會議錄音檔「${rec.fileName}」（會議名稱：${rec.title}，時長：${formatDuration(rec.durationSec)}；已直接附檔或上傳至 Meet_Recordings 資料夾）轉成完整逐字稿並整理會議重點與 Action Items！${notesPart}`;
     try {
       await navigator.clipboard.writeText(promptText);
       setCopiedId(rec.id);
@@ -1602,8 +1602,11 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* Action Buttons: 1. Download -> 2. Open Drive -> 3. Copy Prompt */}
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {/* Action Buttons: 1. Download -> 2. Attach in Chat or Drop in Drive -> 3. Copy Prompt */}
+                    <p className="text-[11px] text-[#8A7E70] font-bold pt-0.5">
+                      💡 錄音檔存在妳的瀏覽器本機：請先點「1. 下載音檔」，再直接把檔案拖進對話框（或丟進「2. Drive 資料夾」），最後貼上「3. 複製指令」即可！
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 pt-0.5">
                       {hasBlobHere && (
                         <button
                           type="button"
